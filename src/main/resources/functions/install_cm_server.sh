@@ -20,9 +20,9 @@ set -x
 function install_cm_server() {
   if which dpkg &> /dev/null; then
     retry_apt_get update
-    retry_apt_get -y install oracle-j2sdk1.6 libmysql-java cloudera-manager-server-db cloudera-manager-server cloudera-manager-daemons
+    retry_apt_get -y install mysql-server oracle-j2sdk1.6 libmysql-java cloudera-manager-server-db cloudera-manager-server cloudera-manager-daemons
   elif which rpm &> /dev/null; then
-    retry_yum install -y jdk-6u31-linux-amd64 cloudera-manager-server-db cloudera-manager-server cloudera-manager-daemons
+    retry_yum install -y mysql-server jdk-6u31-linux-amd64 cloudera-manager-server-db cloudera-manager-server cloudera-manager-daemons
   fi
   service cloudera-scm-server-db initdb
   service cloudera-scm-server-db start
