@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.apache.whirr.Cluster.Instance;
@@ -45,6 +46,8 @@ import com.cloudera.api.model.ApiHost;
 import com.cloudera.api.model.ApiHostList;
 import com.cloudera.api.model.ApiHostRef;
 import com.cloudera.api.model.ApiHostRefList;
+import com.cloudera.api.model.ApiParcel;
+import com.cloudera.api.model.ApiParcelList;
 import com.cloudera.api.model.ApiRole;
 import com.cloudera.api.model.ApiRoleConfigGroup;
 import com.cloudera.api.model.ApiRoleConfigGroupRef;
@@ -62,9 +65,17 @@ import com.cloudera.api.v3.ParcelResource;
 import com.cloudera.api.v3.ParcelsResource;
 import com.cloudera.api.v3.RootResourceV3;
 import com.cloudera.api.v3.ServicesResourceV3;
+
 import com.google.common.base.Charsets;
+import com.google.common.base.Joiner;
+import com.google.common.base.Predicate;
 import com.google.common.base.Splitter;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableMap.Builder;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Ordering;
 import com.google.common.io.CharStreams;
 import com.google.common.io.Resources;
 
@@ -75,8 +86,7 @@ public class CmServerHandler extends BaseHandler {
   public static final String LICENSE_FILE = "cm-license.txt";
   public static final String AUTO_VARIABLE = "whirr.env.cmauto";
 
-  public static final String PROPERTY_PARCEL_PRODUCT = "cmserver.parcel.product";
-  public static final String PROPERTY_PARCEL_VERSION = "cmserver.parcel.version";
+  public static final String PROPERTY_PARCELS = "cmserver.parcels";
   public static final String PROPERTY_PORTS = "cmserver.ports";
   public static final String PROPERTY_PORT_WEB = "cmserver.port.web";
   public static final String PROPERTY_PORT_COMMS = "cmserver.port.comms";
@@ -200,8 +210,67 @@ public class CmServerHandler extends BaseHandler {
     System.out.println();
 
   }
-  
-  private void startServices(ClusterActionEvent event) throws IOException, InterruptedException {
+
+  private void installParcel(ClusterActionEvent event, ClustersResourceV3 clustersResource,
+                             String clusterName, String parcelProduct, String parcelVersion)
+      throws IllegalArgumentException, IOException, InterruptedException {
+    // Install parcels
+    ParcelsResource parcelsResource = clustersResource.getParcelsResource("cluster-1");
+
+    List<ApiParcel> productParcels = parcelsForProduct(readParcels(parcelsResource), parcelProduct);
+    if (productParcels.size() < 1) {
+        throw new IllegalArgumentException("No parcels found for product " + parcelProduct);
+    }
+    
+    List<ApiParcel> versionParcels = parcelsForVersionPrefix(productParcels, parcelVersion);
+    if (versionParcels.size() < 1) {
+        throw new IllegalArgumentException("No parcels found for product " + parcelProduct + " and version " + parcelVersion);
+    }
+
+    ApiParcel parcel = PARCEL_ORDERING.max(versionParcels);
+
+    if (parcel == null) {
+        throw new IllegalArgumentException("No parcel found for product " + parcelProduct + " and version " + parcelVersion);
+    }
+    
+    ParcelResource parcelResource = parcelsResource.getParcelResource(parcel.getProduct(), parcel.getVersion());
+
+    System.out.println();
+    System.out.println(CONSOLE_SPACER);
+    System.out.println("Downloading parcel for product " + parcel.getProduct() + ", version " + parcel.getVersion());
+    System.out.println(CONSOLE_SPACER);
+    System.out.println();
+
+    ApiCommand downloadParcel = parcelResource.startDownloadCommand();
+    while (!parcelResource.readParcel().getStage().equals("DOWNLOADED")) {
+        Thread.sleep(5000);
+    }
+    
+    System.out.println();
+    System.out.println(CONSOLE_SPACER);
+    System.out.println("Distributing parcel for product " + parcel.getProduct() + ", version " + parcel.getVersion());
+    System.out.println(CONSOLE_SPACER);
+    System.out.println();
+
+    ApiCommand distributeParcel = parcelResource.startDistributionCommand();
+    while (!parcelResource.readParcel().getStage().equals("DISTRIBUTED")) {
+        Thread.sleep(5000);
+    }
+    
+    System.out.println();
+    System.out.println(CONSOLE_SPACER);
+    System.out.println("Activating parcel for product " + parcel.getProduct() + ", version " + parcel.getVersion());
+    System.out.println(CONSOLE_SPACER);
+    System.out.println();
+
+    ApiCommand activateParcel = parcelResource.activateCommand();
+    while (!parcelResource.readParcel().getStage().equals("ACTIVATED")) {
+        Thread.sleep(5000);
+    }
+
+  }
+    
+  private void startServices(ClusterActionEvent event) throws IllegalArgumentException, IOException, InterruptedException {
     ApiRootResource apiRoot = new ClouderaManagerClientBuilder()
         .withHost(event.getCluster().getInstanceMatching(role(ROLE)).getPublicIp())
         .withUsernamePassword("admin", "admin")
@@ -245,49 +314,12 @@ public class CmServerHandler extends BaseHandler {
     ApiHost masterHost = hbaseHosts.remove(0);
 
     ApiHost hiveHost = hosts.get(0);
+    // install parcels
 
-    String parcelProduct = getConfiguration(event.getClusterSpec()).getString(PROPERTY_PARCEL_PRODUCT);
-    String parcelVersion = getConfiguration(event.getClusterSpec()).getString(PROPERTY_PARCEL_VERSION);
-    
-    // Install parcels
-    ParcelsResource parcelsResource = clustersResource.getParcelsResource("cluster-1");
-
-    ParcelResource parcelResource = parcelsResource.getParcelResource(parcelProduct, parcelVersion);
-
-    System.out.println();
-    System.out.println(CONSOLE_SPACER);
-    System.out.println("Downloading parcel for product " + parcelProduct + ", version " + parcelVersion);
-    System.out.println(CONSOLE_SPACER);
-    System.out.println();
-
-    ApiCommand downloadParcel = parcelResource.startDownloadCommand();
-    while (!parcelResource.readParcel().getStage().equals("DOWNLOADED")) {
-        Thread.sleep(5000);
+    for (Map.Entry<String,String> p: getParcelsFromConfig(event).entrySet()) {
+        installParcel(event, clustersResource, "cluster-1", p.getKey(), p.getValue());
     }
     
-    System.out.println();
-    System.out.println(CONSOLE_SPACER);
-    System.out.println("Distributing parcel for product " + parcelProduct + ", version " + parcelVersion);
-    System.out.println(CONSOLE_SPACER);
-    System.out.println();
-
-    ApiCommand distributeParcel = parcelResource.startDistributionCommand();
-    while (!parcelResource.readParcel().getStage().equals("DISTRIBUTED")) {
-        Thread.sleep(5000);
-    }
-    
-    System.out.println();
-    System.out.println(CONSOLE_SPACER);
-    System.out.println("Activating parcel for product " + parcelProduct + ", version " + parcelVersion);
-    System.out.println(CONSOLE_SPACER);
-    System.out.println();
-
-    ApiCommand activateParcel = parcelResource.activateCommand();
-    while (!parcelResource.readParcel().getStage().equals("ACTIVATED")) {
-        Thread.sleep(5000);
-    }
-  
-        
     // make services
     ServicesResourceV3 servicesResource = clustersResource.getServicesResource("cluster-1");
     ApiServiceList serviceList = new ApiServiceList();
@@ -579,10 +611,39 @@ public class CmServerHandler extends BaseHandler {
     System.out.println("Finished starting " + serviceType);
   }
   
-    private List<ApiHost> readHosts(RootResourceV3 v2) {
+  private List<ApiHost> readHosts(RootResourceV3 v2) {
     HostsResourceV2 hostsResource = v2.getHostsResource();
     ApiHostList apiHostList = hostsResource.readHosts(DataView.SUMMARY);
     return apiHostList.getHosts();
+  }
+
+  private List<ApiParcel> parcelsForProduct(List<ApiParcel> parcels, final String product) {
+      return ImmutableList.copyOf(Iterables.filter(parcels, new Predicate<ApiParcel>() {
+                  @Override
+                  public boolean apply(ApiParcel parcel) {
+                      return parcel.getProduct().equals(product);
+                  }
+              }));
+  }
+    
+  static final Ordering<ApiParcel> PARCEL_ORDERING = new Ordering<ApiParcel>() {
+      public int compare(ApiParcel left, ApiParcel right) {
+          return left.getVersion().compareTo(right.getVersion());
+      }
+  };
+
+  private List<ApiParcel> parcelsForVersionPrefix(List<ApiParcel> parcels, final String versionPrefix) {
+      return ImmutableList.copyOf(Iterables.filter(parcels, new Predicate<ApiParcel>() {
+                  @Override
+                  public boolean apply(ApiParcel parcel) {
+                      return parcel.getVersion().startsWith(versionPrefix);
+                  }
+              }));
+  }
+      
+  private List<ApiParcel> readParcels(ParcelsResource parcelsResource) {
+    ApiParcelList apiParcelList = parcelsResource.readParcels(DataView.FULL);
+    return apiParcelList.getParcels();
   }
   
   private void waitForCommand(CommandsResource commandsResource, ApiCommand 
@@ -597,5 +658,17 @@ public class CmServerHandler extends BaseHandler {
         Thread.sleep(sleepMs);
       } catch (InterruptedException ex) {}
     }
+  }
+    
+  Map<String,String> getParcelsFromConfig(ClusterActionEvent event) throws IOException {
+      List<String> parcelConfigs = getConfiguration(event.getClusterSpec()).getList(PROPERTY_PARCELS);
+      
+      Builder<String, String> parcels = ImmutableMap.<String, String> builder();
+      if (parcelConfigs.size() > 0) {
+          parcels.putAll(Splitter.on(',').withKeyValueSeparator("=")
+                         .split(Joiner.on(',').join(parcelConfigs)));
+      }
+
+      return parcels.build();
   }
 }
