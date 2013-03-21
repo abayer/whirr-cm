@@ -42,8 +42,8 @@ function configure_cm_server() {
 
     sudo -u postgres psql --command="CREATE USER hive PASSWORD 'hive'"
     sudo -u postgres psql --command="CREATE DATABASE metastore OWNER hive"
-    sudo -u postgres psql --command="CREATE USER oozie PASSWORD 'oozie'"
-    sudo -u postgres psql --command="CREATE DATABASE oozie OWNER oozie"
+#    sudo -u postgres psql --command="CREATE USER oozie PASSWORD 'oozie'"
+  #  sudo -u postgres psql --command="CREATE DATABASE oozie OWNER oozie" || echo "failed to create oozie db"
 
     service cloudera-scm-server start
     if wait_cm_server; then

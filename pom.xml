@@ -64,6 +64,12 @@
 		</dependency>
 		<dependency>
 			<groupId>org.apache.whirr</groupId>
+			<artifactId>whirr-hadoop</artifactId>
+			<version>${whirr.version}</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.whirr</groupId>
 			<artifactId>whirr-core</artifactId>
 			<classifier>tests</classifier>
 			<version>${whirr.version}</version>

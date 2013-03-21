@@ -21,36 +21,36 @@ import static org.apache.whirr.RolePredicates.role;
 import static org.jclouds.scriptbuilder.domain.Statements.call;
 
 import java.io.IOException;
+import java.util.Map;
+import java.util.Set;
 
+import org.apache.whirr.Cluster.Instance;
 import org.apache.whirr.service.ClusterActionEvent;
 import org.apache.whirr.service.FirewallManager.Rule;
+import org.apache.whirr.service.hadoop.VolumeManager;
 
+import com.google.common.base.Function;
+import com.google.common.collect.Iterables;
 
-public class CmNodeHandler extends CmBaseHandler {
-  public static final String ROLE = "cmnode";
-
-  private static final String PROPERTY_PORTS = "cmnode.ports";
-
-  @Override
-  public String getRole() {
-    return ROLE;
-  }
-
-  @Override
-  protected void beforeBootstrap(ClusterActionEvent event) throws IOException {
-    super.beforeBootstrap(event);
-    addStatement(event, call("install_cm"));
-  }
+public abstract class CmBaseHandler extends BaseHandler {
+  protected Map<String,String> deviceMappings;
 
   @Override
   protected void beforeConfigure(ClusterActionEvent event) throws IOException, InterruptedException {
     super.beforeConfigure(event);
         
-    for (Object port : getConfiguration(event.getClusterSpec()).getList(PROPERTY_PORTS)) {
-      if (port != null && !"".equals(port))
-        event.getFirewallManager().addRule(
-          Rule.create().destination(role(getRole())).port(Integer.parseInt(port.toString())));
-    }
-    handleFirewallRules(event);
+    deviceMappings = getDeviceMappings(event);
+    String devMappings = VolumeManager.asString(deviceMappings);
+    addStatement(event, call("prepare_all_disks", "'" + devMappings + "'"));
+  }
+
+  protected Map<String, String> getDeviceMappings(ClusterActionEvent event) {
+      Set<Instance> instances = event.getCluster().getInstancesMatching(role(getRole()));
+      Instance prototype = Iterables.getFirst(instances, null);
+      if (prototype == null) {
+          throw new IllegalStateException("No instances found in role " + getRole());
+      }
+      VolumeManager volumeManager = new VolumeManager();
+      return volumeManager.getDeviceMappings(event.getClusterSpec(), prototype);
   }
 }

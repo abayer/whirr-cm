@@ -67,6 +67,7 @@ import com.cloudera.api.v3.RootResourceV3;
 import com.cloudera.api.v3.ServicesResourceV3;
 
 import com.google.common.base.Charsets;
+import com.google.common.base.Function;
 import com.google.common.base.Joiner;
 import com.google.common.base.Predicate;
 import com.google.common.base.Splitter;
@@ -79,7 +80,7 @@ import com.google.common.collect.Ordering;
 import com.google.common.io.CharStreams;
 import com.google.common.io.Resources;
 
-public class CmServerHandler extends BaseHandler {
+public class CmServerHandler extends CmBaseHandler {
 
   public static final String ROLE = "cmserver";
 
@@ -314,7 +315,9 @@ public class CmServerHandler extends BaseHandler {
     ApiHost masterHost = hbaseHosts.remove(0);
 
     ApiHost hiveHost = hosts.get(0);
-    ApiHost oozieHost = hosts.get(1);
+    ApiHost oozieHost = hosts.get(0);
+    ApiHost hueHost = hosts.get(0);
+    ApiHost impalaHost = hdfsHosts.get(0);
     // install parcels
 
     for (Map.Entry<String,String> p: getParcelsFromConfig(event).entrySet()) {
@@ -330,6 +333,8 @@ public class CmServerHandler extends BaseHandler {
     ApiService hbaseService = buildHbaseService(masterHost, hbaseHosts);
     ApiService hiveService = buildHiveService(hiveHost, event);
     ApiService oozieService = buildOozieService(oozieHost, event);
+    ApiService hueService = buildHueService(hueHost, event);
+    ApiService impalaService = buildImpalaService(impalaHost);
     
     serviceList.add(hdfsService);
     serviceList.add(mrService);
@@ -337,6 +342,8 @@ public class CmServerHandler extends BaseHandler {
     serviceList.add(hbaseService);
     serviceList.add(hiveService);
     serviceList.add(oozieService);
+    serviceList.add(hueService);
+    serviceList.add(impalaService);
 
     servicesResource.createServices(serviceList);
 
@@ -352,19 +359,25 @@ public class CmServerHandler extends BaseHandler {
     startService(servicesResource, commandsResource, "HIVE", "hive-1");
     initOozie(servicesResource, commandsResource);
     startService(servicesResource, commandsResource, "OOZIE", "oozie-1");
+    syncHueDb(servicesResource, commandsResource);
+    startService(servicesResource, commandsResource, "HUE", "hue-1");
+    createHueWarehouse(servicesResource, commandsResource);
+    startService(servicesResource, commandsResource, "IMPALA", "impala-1");
   }
   
   private ApiService buildHdfsService(ApiHost nnHost, ApiHost snnHost, List<ApiHost> dnHosts) {
     ApiService hdfsService = new ApiService();
     hdfsService.setType("HDFS");
     hdfsService.setName("hdfs-1");
+    ApiServiceConfig serviceConf = new ApiServiceConfig();
+    serviceConf.add(new ApiConfig("dfs_block_local_path_access_user", "impala"));
 
     List<ApiRoleConfigGroup> groupList = Lists.newArrayList();
 
     ApiRoleConfigGroup nnGrp = new ApiRoleConfigGroup();
     groupList.add(nnGrp);
     ApiConfigList nnConfig = new ApiConfigList();
-    nnConfig.add(new ApiConfig("dfs_name_dir_list", "/data/1/dfs/nn"));
+    nnConfig.add(new ApiConfig("dfs_name_dir_list", appendToDataDirectories(deviceMappings.keySet(),"/dfs/nn")));
     nnGrp.setRoleType("NAMENODE");
     nnGrp.setConfig(nnConfig);
     nnGrp.setName("whirr-nn-group");
@@ -373,7 +386,7 @@ public class CmServerHandler extends BaseHandler {
     ApiRoleConfigGroup snnGrp = new ApiRoleConfigGroup();
     groupList.add(snnGrp);
     ApiConfigList snnConfig = new ApiConfigList();
-    snnConfig.add(new ApiConfig("fs_checkpoint_dir_list", "/data/1/dfs/snn"));
+    snnConfig.add(new ApiConfig("fs_checkpoint_dir_list", appendToDataDirectories(deviceMappings.keySet(),"/dfs/snn")));
     snnGrp.setRoleType("SECONDARYNAMENODE");
     snnGrp.setConfig(snnConfig);
     snnGrp.setName("whirr-snn-group");
@@ -382,13 +395,14 @@ public class CmServerHandler extends BaseHandler {
     ApiRoleConfigGroup dnGrp = new ApiRoleConfigGroup();
     groupList.add(dnGrp);
     ApiConfigList dnConfig = new ApiConfigList();
-    dnConfig.add(new ApiConfig("dfs_data_dir_list", "/mnt/data/1/dfs/dn"));
+    dnConfig.add(new ApiConfig("dfs_data_dir_list", appendToDataDirectories(deviceMappings.keySet(),"/dfs/dn")));
     dnGrp.setRoleType("DATANODE");
     dnGrp.setConfig(dnConfig);
     dnGrp.setName("whirr-dn-group");
     dnGrp.setBase(false);
 
     hdfsService.setRoleConfigGroups(groupList);
+    hdfsService.setConfig(serviceConf);
     
     List<ApiRole> roles = new ArrayList<ApiRole>();
 
@@ -432,7 +446,7 @@ public class CmServerHandler extends BaseHandler {
     ApiRoleConfigGroup jtGrp = new ApiRoleConfigGroup();
     groupList.add(jtGrp);
     ApiConfigList jtConfig = new ApiConfigList();
-    jtConfig.add(new ApiConfig("jobtracker_mapred_local_dir_list", "/data/1/mapred/jt"));
+    jtConfig.add(new ApiConfig("jobtracker_mapred_local_dir_list", appendToDataDirectories(deviceMappings.keySet(), "/mapred/jt")));
     jtGrp.setRoleType("JOBTRACKER");
     jtGrp.setConfig(jtConfig);
     jtGrp.setName("whirr-jt-group");
@@ -441,7 +455,7 @@ public class CmServerHandler extends BaseHandler {
     ApiRoleConfigGroup ttGrp = new ApiRoleConfigGroup();
     groupList.add(ttGrp);
     ApiConfigList ttConfig = new ApiConfigList();
-    ttConfig.add(new ApiConfig("tasktracker_mapred_local_dir_list", "/data/1/mapred/local"));
+    ttConfig.add(new ApiConfig("tasktracker_mapred_local_dir_list", appendToDataDirectories(deviceMappings.keySet(), "/mapred/local")));
     ttGrp.setRoleType("TASKTRACKER");
     ttGrp.setConfig(ttConfig);
     ttGrp.setName("whirr-tt-group");
@@ -561,7 +575,35 @@ public class CmServerHandler extends BaseHandler {
     return hbaseService;
   }
 
+  private ApiService buildImpalaService(ApiHost impalaHost) {
+    ApiService impalaService = new ApiService();
+    impalaService.setType("IMPALA");
+    impalaService.setName("impala-1");
+
+    ApiServiceConfig serviceConf = new ApiServiceConfig();
+    serviceConf.add(new ApiConfig("hdfs_service", "hdfs-1"));
+    serviceConf.add(new ApiConfig("hbase_service", "hbase-1"));
+    serviceConf.add(new ApiConfig("hive_service", "hive-1"));
+    impalaService.setConfig(serviceConf);
     
+    List<ApiRole> roles = new ArrayList<ApiRole>();
+    
+    ApiRole impaladRole = new ApiRole();
+    impaladRole.setType("IMPALAD");
+    impaladRole.setName("impalad");
+    impaladRole.setHostRef(new ApiHostRef(impalaHost.getHostId()));
+    roles.add(impaladRole);
+    
+    ApiRole statestoreRole = new ApiRole();
+    statestoreRole.setType("STATESTORE");
+    statestoreRole.setName("statestore");
+    statestoreRole.setHostRef(new ApiHostRef(impalaHost.getHostId()));
+    roles.add(statestoreRole);
+
+    impalaService.setRoles(roles);
+    return impalaService;
+  }
+
   private ApiService buildOozieService(ApiHost oozieHost, ClusterActionEvent event) {
     String masterAddress;
 
@@ -584,11 +626,11 @@ public class CmServerHandler extends BaseHandler {
     ApiRoleConfigGroup oozieServerGrp = new ApiRoleConfigGroup();
     groupList.add(oozieServerGrp);
     ApiConfigList oozieServerConfig = new ApiConfigList();
-    oozieServerConfig.add(new ApiConfig("oozie_database_type", "postgresql"));
+    /*    oozieServerConfig.add(new ApiConfig("oozie_database_type", "postgresql"));
     oozieServerConfig.add(new ApiConfig("oozie_database_host", masterAddress + ":5432"));
     oozieServerConfig.add(new ApiConfig("oozie_database_name", "oozie"));
     oozieServerConfig.add(new ApiConfig("oozie_database_user", "oozie"));
-    oozieServerConfig.add(new ApiConfig("oozie_database_password", "oozie"));
+    oozieServerConfig.add(new ApiConfig("oozie_database_password", "oozie")); */
     oozieServerGrp.setRoleType("OOZIE_SERVER");
     oozieServerGrp.setConfig(oozieServerConfig);
     oozieServerGrp.setName("whirr-oozie-server-group");
@@ -608,6 +650,36 @@ public class CmServerHandler extends BaseHandler {
     
     oozieService.setRoles(roles);
     return oozieService;
+  }
+    
+  private ApiService buildHueService(ApiHost hueHost, ClusterActionEvent event) {
+    ApiService hueService = new ApiService();
+    hueService.setType("HUE");
+    hueService.setName("hue-1");
+
+    ApiServiceConfig serviceConf = new ApiServiceConfig();
+    serviceConf.add(new ApiConfig("hive_service", "hive-1"));
+    serviceConf.add(new ApiConfig("hue_webhdfs", "nn"));
+    serviceConf.add(new ApiConfig("oozie_service", "oozie-1"));
+
+    hueService.setConfig(serviceConf);
+    
+    List<ApiRole> roles = new ArrayList<ApiRole>();
+    
+    ApiRole hueServerRole = new ApiRole();
+    hueServerRole.setType("HUE_SERVER");
+    hueServerRole.setName("hueserver");
+    hueServerRole.setHostRef(new ApiHostRef(hueHost.getHostId()));
+    roles.add(hueServerRole);
+    
+    ApiRole hueBeeswaxRole = new ApiRole();
+    hueBeeswaxRole.setType("BEESWAX_SERVER");
+    hueBeeswaxRole.setName("beeswaxserver");
+    hueBeeswaxRole.setHostRef(new ApiHostRef(hueHost.getHostId()));
+    roles.add(hueBeeswaxRole);
+    
+    hueService.setRoles(roles);
+    return hueService;
   }
 
   private void formatHdfs(ServicesResourceV3 servicesResource, 
@@ -677,6 +749,29 @@ public class CmServerHandler extends BaseHandler {
     System.out.println("Finished starting " + serviceType);
   }
   
+  private void syncHueDb(ServicesResourceV3 servicesResource, 
+      CommandsResource commandsResource) {
+    RoleCommandsResource roleCommands = servicesResource
+        .getRoleCommandsResource("hue-1");
+    
+    System.out.println("Syncing Hue DB...");
+    ApiRoleNameList syncList = new ApiRoleNameList();
+    syncList.add("hueserver");
+    ApiBulkCommandList syncCommand = roleCommands.syncHueDbCommand(syncList);
+    for (ApiCommand subcommand : syncCommand) {
+      waitForCommand(commandsResource, subcommand, 500);
+    }
+    System.out.println("Finished syncing Hue DB");
+  }
+  
+  private void createHueWarehouse(ServicesResourceV3 servicesResource, 
+      CommandsResource commandsResource) {
+    System.out.println("Creating Hue Hive warehouse...");
+    ApiCommand warehouseCommand = servicesResource.createBeeswaxWarehouseCommand("hue-1");
+    waitForCommand(commandsResource, warehouseCommand, 500);
+    System.out.println("Finished creating Hue Hive warehouse...");
+  }
+
   private List<ApiHost> readHosts(RootResourceV3 v2) {
     HostsResourceV2 hostsResource = v2.getHostsResource();
     ApiHostList apiHostList = hostsResource.readHosts(DataView.SUMMARY);
@@ -736,5 +831,15 @@ public class CmServerHandler extends BaseHandler {
       }
 
       return parcels.build();
+  }
+
+  private static String appendToDataDirectories(Set<String> dataDirectories, final String suffix) {
+    return Joiner.on(',').join(Lists.transform(Lists.newArrayList(dataDirectories),
+      new Function<String, String>() {
+        @Override public String apply(String input) {
+          return input + suffix;
+        }
+      }
+    ));
   }
 }
