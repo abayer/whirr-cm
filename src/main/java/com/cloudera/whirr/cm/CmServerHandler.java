@@ -327,8 +327,8 @@ public class CmServerHandler extends CmBaseHandler {
     // make services
     ServicesResourceV3 servicesResource = clustersResource.getServicesResource("cluster-1");
     ApiServiceList serviceList = new ApiServiceList();
-    ApiService hdfsService = buildHdfsService(nnHost, snnHost, hdfsHosts);
-    ApiService mrService = buildMapReduceService(jtHost, mrHosts);
+    ApiService hdfsService = buildHdfsService(nnHost, snnHost, hdfsHosts, event);
+    ApiService mrService = buildMapReduceService(jtHost, mrHosts, event);
     ApiService zkService = buildZookeeperService(zkHost);
     ApiService hbaseService = buildHbaseService(masterHost, hbaseHosts);
     ApiService hiveService = buildHiveService(hiveHost, event);
@@ -365,7 +365,8 @@ public class CmServerHandler extends CmBaseHandler {
     startService(servicesResource, commandsResource, "IMPALA", "impala-1");
   }
   
-  private ApiService buildHdfsService(ApiHost nnHost, ApiHost snnHost, List<ApiHost> dnHosts) {
+  private ApiService buildHdfsService(ApiHost nnHost, ApiHost snnHost, List<ApiHost> dnHosts, ClusterActionEvent event)
+    throws IOException {
     ApiService hdfsService = new ApiService();
     hdfsService.setType("HDFS");
     hdfsService.setName("hdfs-1");
@@ -377,7 +378,7 @@ public class CmServerHandler extends CmBaseHandler {
     ApiRoleConfigGroup nnGrp = new ApiRoleConfigGroup();
     groupList.add(nnGrp);
     ApiConfigList nnConfig = new ApiConfigList();
-    nnConfig.add(new ApiConfig("dfs_name_dir_list", appendToDataDirectories(deviceMappings.keySet(),"/dfs/nn")));
+    nnConfig.add(new ApiConfig("dfs_name_dir_list", getDataDirForSuffix(event, "/dfs/nn")));
     nnGrp.setRoleType("NAMENODE");
     nnGrp.setConfig(nnConfig);
     nnGrp.setName("whirr-nn-group");
@@ -386,7 +387,7 @@ public class CmServerHandler extends CmBaseHandler {
     ApiRoleConfigGroup snnGrp = new ApiRoleConfigGroup();
     groupList.add(snnGrp);
     ApiConfigList snnConfig = new ApiConfigList();
-    snnConfig.add(new ApiConfig("fs_checkpoint_dir_list", appendToDataDirectories(deviceMappings.keySet(),"/dfs/snn")));
+    snnConfig.add(new ApiConfig("fs_checkpoint_dir_list", getDataDirForSuffix(event, "/dfs/snn")));
     snnGrp.setRoleType("SECONDARYNAMENODE");
     snnGrp.setConfig(snnConfig);
     snnGrp.setName("whirr-snn-group");
@@ -395,7 +396,7 @@ public class CmServerHandler extends CmBaseHandler {
     ApiRoleConfigGroup dnGrp = new ApiRoleConfigGroup();
     groupList.add(dnGrp);
     ApiConfigList dnConfig = new ApiConfigList();
-    dnConfig.add(new ApiConfig("dfs_data_dir_list", appendToDataDirectories(deviceMappings.keySet(),"/dfs/dn")));
+    dnConfig.add(new ApiConfig("dfs_data_dir_list", getDataDirForSuffix(event, "/dfs/dn")));
     dnGrp.setRoleType("DATANODE");
     dnGrp.setConfig(dnConfig);
     dnGrp.setName("whirr-dn-group");
@@ -434,7 +435,8 @@ public class CmServerHandler extends CmBaseHandler {
     return hdfsService;
   }
   
-  private ApiService buildMapReduceService(ApiHost jtHost, List<ApiHost> ttHosts) {
+  private ApiService buildMapReduceService(ApiHost jtHost, List<ApiHost> ttHosts, ClusterActionEvent event)
+    throws IOException {
     ApiService mrService = new ApiService();
     mrService.setType("MAPREDUCE");
     mrService.setName("mapreduce-1");
@@ -446,7 +448,7 @@ public class CmServerHandler extends CmBaseHandler {
     ApiRoleConfigGroup jtGrp = new ApiRoleConfigGroup();
     groupList.add(jtGrp);
     ApiConfigList jtConfig = new ApiConfigList();
-    jtConfig.add(new ApiConfig("jobtracker_mapred_local_dir_list", appendToDataDirectories(deviceMappings.keySet(), "/mapred/jt")));
+    jtConfig.add(new ApiConfig("jobtracker_mapred_local_dir_list", getDataDirForSuffix(event, "/mapred/jt")));
     jtGrp.setRoleType("JOBTRACKER");
     jtGrp.setConfig(jtConfig);
     jtGrp.setName("whirr-jt-group");
@@ -455,7 +457,7 @@ public class CmServerHandler extends CmBaseHandler {
     ApiRoleConfigGroup ttGrp = new ApiRoleConfigGroup();
     groupList.add(ttGrp);
     ApiConfigList ttConfig = new ApiConfigList();
-    ttConfig.add(new ApiConfig("tasktracker_mapred_local_dir_list", appendToDataDirectories(deviceMappings.keySet(), "/mapred/local")));
+    ttConfig.add(new ApiConfig("tasktracker_mapred_local_dir_list", getDataDirForSuffix(event, "/mapred/local")));
     ttGrp.setRoleType("TASKTRACKER");
     ttGrp.setConfig(ttConfig);
     ttGrp.setName("whirr-tt-group");
@@ -833,6 +835,16 @@ public class CmServerHandler extends CmBaseHandler {
       return parcels.build();
   }
 
+  private String getDataDirForSuffix(ClusterActionEvent event, String suffix) throws IOException {
+    String dataDirsRoot = getConfiguration(event.getClusterSpec()).getString(DATA_DIRS_ROOT);
+
+    if (dataDirsRoot != null) {
+        return dataDirsRoot + suffix;
+    } else {
+        return appendToDataDirectories(deviceMappings.keySet(), suffix);
+    }
+  }
+ 
   private static String appendToDataDirectories(Set<String> dataDirectories, final String suffix) {
     return Joiner.on(',').join(Lists.transform(Lists.newArrayList(dataDirectories),
       new Function<String, String>() {

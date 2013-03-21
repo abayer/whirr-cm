@@ -33,15 +33,19 @@ import com.google.common.base.Function;
 import com.google.common.collect.Iterables;
 
 public abstract class CmBaseHandler extends BaseHandler {
+  public static final String DATA_DIRS_ROOT = "cm.data.dirs.root";
+
   protected Map<String,String> deviceMappings;
 
   @Override
   protected void beforeConfigure(ClusterActionEvent event) throws IOException, InterruptedException {
     super.beforeConfigure(event);
-        
-    deviceMappings = getDeviceMappings(event);
-    String devMappings = VolumeManager.asString(deviceMappings);
-    addStatement(event, call("prepare_all_disks_cm", "'" + devMappings + "'"));
+
+    if (getConfiguration(event.getClusterSpec()).getString(DATA_DIRS_ROOT) == null) {
+      deviceMappings = getDeviceMappings(event);
+      String devMappings = VolumeManager.asString(deviceMappings);
+      addStatement(event, call("prepare_all_disks_cm", "'" + devMappings + "'"));
+    }
   }
 
   protected Map<String, String> getDeviceMappings(ClusterActionEvent event) {
