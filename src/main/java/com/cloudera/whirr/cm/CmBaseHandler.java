@@ -41,7 +41,7 @@ public abstract class CmBaseHandler extends BaseHandler {
         
     deviceMappings = getDeviceMappings(event);
     String devMappings = VolumeManager.asString(deviceMappings);
-    addStatement(event, call("prepare_all_disks", "'" + devMappings + "'"));
+    addStatement(event, call("prepare_all_disks_cm", "'" + devMappings + "'"));
   }
 
   protected Map<String, String> getDeviceMappings(ClusterActionEvent event) {
