@@ -314,6 +314,7 @@ public class CmServerHandler extends BaseHandler {
     ApiHost masterHost = hbaseHosts.remove(0);
 
     ApiHost hiveHost = hosts.get(0);
+    ApiHost oozieHost = hosts.get(1);
     // install parcels
 
     for (Map.Entry<String,String> p: getParcelsFromConfig(event).entrySet()) {
@@ -328,12 +329,14 @@ public class CmServerHandler extends BaseHandler {
     ApiService zkService = buildZookeeperService(zkHost);
     ApiService hbaseService = buildHbaseService(masterHost, hbaseHosts);
     ApiService hiveService = buildHiveService(hiveHost, event);
+    ApiService oozieService = buildOozieService(oozieHost, event);
     
     serviceList.add(hdfsService);
     serviceList.add(mrService);
     serviceList.add(zkService);
     serviceList.add(hbaseService);
     serviceList.add(hiveService);
+    serviceList.add(oozieService);
 
     servicesResource.createServices(serviceList);
 
@@ -347,6 +350,8 @@ public class CmServerHandler extends BaseHandler {
     startService(servicesResource, commandsResource, "HBASE", "hbase-1");
     initHiveMetastore(servicesResource, commandsResource);
     startService(servicesResource, commandsResource, "HIVE", "hive-1");
+    initOozie(servicesResource, commandsResource);
+    startService(servicesResource, commandsResource, "OOZIE", "oozie-1");
   }
   
   private ApiService buildHdfsService(ApiHost nnHost, ApiHost snnHost, List<ApiHost> dnHosts) {
@@ -507,7 +512,7 @@ public class CmServerHandler extends BaseHandler {
     hiveService.setRoles(roles);
     return hiveService;
   }
-
+    
   private ApiService buildZookeeperService(ApiHost zkHost) {
     ApiService zkService = new ApiService();
     zkService.setType("ZOOKEEPER");
@@ -555,7 +560,56 @@ public class CmServerHandler extends BaseHandler {
     hbaseService.setRoles(roles);
     return hbaseService;
   }
-  
+
+    
+  private ApiService buildOozieService(ApiHost oozieHost, ClusterActionEvent event) {
+    String masterAddress;
+
+    if (event.getCluster().getInstanceMatching(role(ROLE)).getPrivateIp() != null
+        && !event.getCluster().getInstanceMatching(role(ROLE)).getPrivateIp().equals("")) {
+        masterAddress = event.getCluster().getInstanceMatching(role(ROLE)).getPrivateIp();
+    } else {
+        masterAddress = event.getCluster().getInstanceMatching(role(ROLE)).getPublicIp();
+    }
+    
+    ApiService oozieService = new ApiService();
+    oozieService.setType("OOZIE");
+    oozieService.setName("oozie-1");
+
+    ApiServiceConfig serviceConf = new ApiServiceConfig();
+    serviceConf.add(new ApiConfig("mapreduce_yarn_service", "mapreduce-1"));
+
+    List<ApiRoleConfigGroup> groupList = Lists.newArrayList();
+    
+    ApiRoleConfigGroup oozieServerGrp = new ApiRoleConfigGroup();
+    groupList.add(oozieServerGrp);
+    ApiConfigList oozieServerConfig = new ApiConfigList();
+    oozieServerConfig.add(new ApiConfig("oozie_database_type", "postgresql"));
+    oozieServerConfig.add(new ApiConfig("oozie_database_host", masterAddress + ":5432"));
+    oozieServerConfig.add(new ApiConfig("oozie_database_name", "oozie"));
+    oozieServerConfig.add(new ApiConfig("oozie_database_user", "oozie"));
+    oozieServerConfig.add(new ApiConfig("oozie_database_password", "oozie"));
+    oozieServerGrp.setRoleType("OOZIE_SERVER");
+    oozieServerGrp.setConfig(oozieServerConfig);
+    oozieServerGrp.setName("whirr-oozie-server-group");
+    oozieServerGrp.setBase(false);
+
+    oozieService.setRoleConfigGroups(groupList);
+    oozieService.setConfig(serviceConf);
+    
+    List<ApiRole> roles = new ArrayList<ApiRole>();
+    
+    ApiRole oozieRole = new ApiRole();
+    oozieRole.setType("OOZIE_SERVER");
+    oozieRole.setName("oozie-server");
+    oozieRole.setHostRef(new ApiHostRef(oozieHost.getHostId()));
+    oozieRole.setRoleConfigGroupRef(new ApiRoleConfigGroupRef("whirr-oozie-server-group"));
+    roles.add(oozieRole);
+    
+    oozieService.setRoles(roles);
+    return oozieService;
+  }
+
   private void formatHdfs(ServicesResourceV3 servicesResource, 
       CommandsResource commandsResource) {
     RoleCommandsResource roleCommands = servicesResource
@@ -595,6 +649,18 @@ public class CmServerHandler extends BaseHandler {
     System.out.println("Finished initializing HIVE Metastore");
   }
   
+  private void initOozie(ServicesResourceV3 servicesResource,
+      CommandsResource commandsResource) {
+    System.out.println("Installing Oozie Sharelib...");
+    ApiCommand sharelibCommand = servicesResource.installOozieShareLib("oozie-1");
+    waitForCommand(commandsResource, sharelibCommand, 500);
+    System.out.println("Finished installing Oozie Sharelib");
+    System.out.println("Creating Oozie DB...");
+    ApiCommand dbCommand = servicesResource.createOozieDb("oozie-1");
+    waitForCommand(commandsResource, dbCommand, 500);
+    System.out.println("Finished creating Oozie DB");
+  }
+
   private void createHbaseRoot(ServicesResourceV3 servicesResource,
       CommandsResource commandsResource) {
     System.out.println("Configuring HBASE...");
@@ -621,7 +687,7 @@ public class CmServerHandler extends BaseHandler {
       return ImmutableList.copyOf(Iterables.filter(parcels, new Predicate<ApiParcel>() {
                   @Override
                   public boolean apply(ApiParcel parcel) {
-                      return parcel.getProduct().equals(product);
+                      return parcel.getProduct().equalsIgnoreCase(product);
                   }
               }));
   }
@@ -636,7 +702,7 @@ public class CmServerHandler extends BaseHandler {
       return ImmutableList.copyOf(Iterables.filter(parcels, new Predicate<ApiParcel>() {
                   @Override
                   public boolean apply(ApiParcel parcel) {
-                      return parcel.getVersion().startsWith(versionPrefix);
+                      return parcel.getVersion().toLowerCase().startsWith(versionPrefix.toLowerCase());
                   }
               }));
   }
